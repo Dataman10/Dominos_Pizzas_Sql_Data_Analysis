@@ -1,0 +1,737 @@
+SELECT *FROM customers;
+SELECT *FROM orders;
+SELECT *FROM order_details;
+SELECT *FROM pizzas;
+SELECT *FROM pizza_types;
+
+--IMPORTANT SQL QUERIES
+ 
+/*
+"We are trying to understand our order volume in detail so we can measure store performance and benchmark growth.
+Instead of just knowing the total number of unique orders .I'd like a deeper breakdown:
+
+-What is the total number of unique orders placed so far?
+-How has this order volume changed month-over-month and year-over-year?
+-Can we identify peak and off-peak ordering days?
+-How do order volumes vary by day of the week (eg., weekends vs weekdays)?
+-What is the average number of orders per customer?
+-who are our top repeat customers driving the order volume?
+-Can you also project the expected order growth trend based on historical data?"
+
+*/
+
+Analyst Tasks:
+
+1. Count the total number of unique orders (COUNT(DISTINCT order_id)).
+2. Break down orders by month and year (GROUP BY EXTRACT(MONTH/YEAR FROM order_date)).
+3. Find day-wise order distribution (TO_CHAR(order_date , 'Day')).
+4. Compute average orders per customer (COUNT(order_id)/COUNT(DISTINCT custId)).
+5. Identify repeat customers and their order frequency (HAVING COUNT(order_id) > 1).\
+6. Use window functions to calculate month-over-month growth % (LAG(order_count) OVER...).
+7. Build a trend projections using cumulative counts or forecasting methods.
+
+
+--Queries Answer
+1.1. SELECT COUNT(DISTINCT order_id) FROM orders;
+
+1.2. 
+SELECT * FROM orders;
+
+WITH monthly_orders AS (
+	SELECT DATE_TRUNC('month' , order_date) AS month,
+	COUNT(order_id) AS order_count
+	FROM orders
+	GROUP BY DATE_TRUNC('month' , order_date)
+)
+
+SELECT month,
+	order_count,
+	LAG(order_count) OVER(ORDER BY month) AS prev_month,
+	ROUND(100.0 * (order_count - LAG(order_count) OVER(ORDER BY month))/NULLIF(LAG(order_count)OVER(ORDER BY month) , 0) , 2)AS mom_growth_pct
+	FROM monthly_orders
+ORDER BY month;
+
+-1.2B
+WITH yearly_orders AS (
+	SELECT DATE_TRUNC('year' , order_date) AS year,
+	COUNT(order_id) AS order_count
+	FROM orders
+	GROUP BY DATE_TRUNC('year' , order_date)
+)
+
+SELECT year,
+	order_count,
+	LAG(order_count) OVER(ORDER BY year) AS prev_year,
+	ROUND(100.0 * (order_count - LAG(order_count) OVER(ORDER BY year))/NULLIF(LAG(order_count)OVER(ORDER BY year) , 0) , 2)AS yoy_growth_pct
+	FROM yearly_orders
+ORDER BY year;
+
+
+--Since there is only 1 year data then the year on year data can't be predicted
+SELECT DISTINCT DATE_PART('year', order_date) AS year
+FROM orders
+ORDER BY year;
+
+
+--1.3
+SELECT
+    TO_CHAR(order_date, 'Dy') AS weekday,
+    COUNT(DISTINCT order_id) AS total_orders,
+	EXTRACT(ISODOW FROM order_date) AS day_date
+FROM orders
+GROUP BY weekday , day_date
+ORDER BY day_date; 
+
+--1.4
+SELECT
+CASE
+	WHEN EXTRACT(ISODOW FROM order_date) IN (6,7)
+	THEN 'weekends'
+	ELSE 'weekdays' END
+	AS day_date,
+COUNT(DISTINCT order_id) AS order_vol
+FROM orders
+GROUP BY day_date
+ORDER BY order_vol DESC;
+
+--1.5
+SELECT ROUND(AVG(total_orders) , 2) AS avg_order
+FROM (
+SELECT CONCAT(c.first_name , ' ' , c.last_name) AS name,
+	   COUNT(DISTINCT o.order_id) AS total_orders
+FROM customers AS c
+INNER JOIN orders AS o
+ON c.custid = o.custid
+GROUP BY name
+)AS t;
+
+--1.6
+SELECT CONCAT(first_name , ' ' , last_name) AS customer_name,
+	   COUNT(DISTINCT order_id) AS total_orders
+FROM customers AS c
+INNER JOIN orders AS o
+ON c.custid = o.custid
+GROUP BY customer_name
+HAVING COUNT(DISTINCT order_id) >=5
+ORDER BY total_orders DESC;
+
+--cumulative order trend
+
+SELECT order_date,
+	   COUNT(order_id) AS daily_orders,
+	   SUM(COUNT(order_id)) OVER(ORDER BY order_date) AS cumulative_orders
+	   FROM orders
+GROUP BY order_date
+ORDER BY order_date;
+
+
+
+2. Total Revenue from Pizza Sales
+
+Stakeholders (Finance Team)
+/* 
+"We  need to report monthly revenue to management.
+can you calculate the total revenue generated from all pizza sales,
+considering price * quantity from each other?"
+
+Analyst Task : Join order_details with pizzas and sum (price * quantity)
+*/
+
+--Query
+SELECT *FROM order_details;
+SELECT *FROM pizza_types;
+SELECT *FROM pizzas;
+
+SELECT SUM(od.quantity * p.price) AS revenue
+FROM order_details AS od
+INNER JOIN pizzas AS p
+ON od.pizza_id  = p.pizza_id
+ORDER BY revenue DESC;  
+
+3. Highest-Priced Pizza
+
+Stakeholder (Menu Manager):
+/*
+"Our premium pizzas must be correctly priced .Can you find out which pizza
+has the highest price on our menu and confirm its category and size"
+*/
+
+Analyst Task: Query the pizzas table for the maximum price , joining with pizza_types for details.
+
+SELECT pt.category , p.size , CONCAT('$' , p.price)
+FROM pizza_types AS pt
+INNER JOIN pizzas AS p
+ON pt.pizza_type_id = p.pizza_type_id
+GROUP BY pt.category ,p.size , p.price
+ORDER BY p.price DESC;
+
+
+4. Most Common Pizza Size Ordered
+Stakeholder (Logistics Manager)
+
+/*
+"To optimize packaging and raw material supply , I need to know which
+pizza size (S , M , L , XL , XXL) is ordered the most."
+*/
+Analyst Task: Count and Group orders by pizza size from pizzas * order_details.
+
+--Query
+SELECT *FROM order_details;
+SELECT *FROM pizza_types;
+SELECT *FROM pizzas;
+
+SELECT p.size , COUNT(od.order_id) AS total_orders FROM
+pizzas AS p
+INNER JOIN order_details AS od
+ON p.pizza_id = od.pizza_id
+GROUP BY p.size
+ORDER BY total_orders DESC;
+
+5. Top 5 Most Ordered Pizza Types
+
+
+Stakeholder (Product Head):
+
+/*
+We want to promote our top-selling pizzas. Can you provide the top 5 pizza
+types ordered by quantity, along with the exact number of units sold?"
+*/
+
+Analyst Task: Join order_details with pizza_types , group by pizza name, and rank top 5.
+
+
+--Query
+SELECT *FROM order_details;
+SELECT *FROM pizza_types;
+SELECT *FROM pizzas; 
+
+
+
+
+SELECT pt.name , SUM(od.quantity) AS total_quantity_sold
+FROM pizza_types AS pt
+INNER JOIN pizzas AS p
+ON pt.pizza_type_id = p.pizza_type_id
+INNER JOIN order_details AS od
+ON od.pizza_id = p.pizza_id
+GROUP BY pt.name
+ORDER BY total_quantity_sold DESC LIMIT 5;
+
+
+6. Total Quantity by Pizza Category
+
+Stakeholder (Marketing Category):
+
+/*
+"We run promotions based on categories (Classic , Veggie , Supreme , Chicken , etc.).
+Can you calculate the total number of pizzas sold in each category
+so we can plan targeted campaigns?"
+*/
+
+Analyst Task :Join pizzas with pizza_types and sum quantities by category.
+
+--Query
+SELECT *FROM order_details;
+SELECT *FROM pizza_types;
+SELECT *FROM pizzas; 
+
+
+SELECT  pt.category , SUM(od.quantity) AS total_quantity 
+FROM order_details AS od
+INNER JOIN pizzas AS p
+ON od.pizza_id = p.pizza_id
+INNER JOIN pizza_types AS pt
+ON p.pizza_type_id  = pt.pizza_type_id
+GROUP BY pt.category
+ORDER BY total_quantity DESC;
+
+7. Orders by Hour of  the Day
+
+Stakeholder (Operations Head)
+
+/*
+"When are customers ordering the most? Do they prefer lunch (12 - 2 PM) , 
+evenings (6 - 9 PM) , or late-night? please give me a distribution of
+orders by hour of the day so we can adjust staffing."
+*/
+
+Analyst Task : Extract the hour from the order_time in orders table and count frequency.
+
+
+--Query
+SELECT *FROM order_details;
+SELECT *FROM orders;
+SELECT *FROM pizza_types;
+SELECT *FROM pizzas; 
+
+
+SELECT 
+    EXTRACT(HOUR FROM o.order_time::TIME) AS order_hour,
+    COUNT(DISTINCT od.order_id) AS order_count,
+    SUM(od.quantity) AS total_items_ordered
+FROM 
+    orders o
+JOIN 
+    order_details od ON o.order_id = od.order_id
+GROUP BY 
+    order_hour
+ORDER BY 
+    order_count DESC;
+
+8. Category-Wise Pizza Distribution 
+
+
+Stakeholders (Product Strategy Team):
+
+/*
+"Which categories (Like Veggie , Chicken , Supreme) dominate 
+our menu sales? Can you prepare a breakdown of orders per category with percentage share?"
+*/
+Analyst Task : Join tables and calculate share of each category.
+
+--QUERY
+
+SELECT *FROM order_details;
+SELECT *FROM orders;
+SELECT *FROM pizzas;
+SELECT *FROM pizza_types;
+    
+
+SELECT pt.category , SUM(od.quantity) AS total_quantity,
+	   ROUND(SUM(od.quantity) * 100 / (SELECT SUM(quantity) FROM order_details) , 2) AS percentage_share
+FROM order_details AS od
+INNER JOIN pizzas AS p
+ON od.pizza_id = p.pizza_id
+INNER JOIN pizza_types AS pt
+ON p.pizza_type_id = pt.pizza_type_id
+GROUP BY pt.category
+ORDER BY percentage_share DESC;
+
+
+9. Average Pizzas Ordered Per Day
+
+Stakeholder (CEO):
+/*
+"I want to see if our daily demand is consistent.
+Can you group orders by date and tell me the avg number of pizzas ordered per day?"
+*/
+
+Analyst Task: Aggregate by order_date , calculate total pizzas per day , then avg.
+
+SELECT*FROM orders;
+SELECT *FROM order_details;
+
+SELECT ROUND(AVG(total_orders) , 2) AS avg_orders FROM 
+(SELECT DATE(o.order_date) AS day_date,
+ SUM(od.quantity) AS total_orders
+FROM orders AS o
+JOIN order_details AS od
+ON o.order_id = od.order_id
+GROUP BY day_date
+) AS t;
+
+
+SELECT ROUND(AVG(daily_total) , 2) AS avg_pizzas_per_day
+FROM (
+      SELECT o.order_date , SUM(od.quantity) AS daily_total
+	  FROM orders AS o
+	  JOIN order_details AS od 
+	  ON o.order_id = od.order_id
+	  GROUP BY o.order_date
+) AS t;
+
+
+10. Top 3 Pizzas by Revenue
+
+Stakeholder (Finance Team):
+/*
+We need to know which pizzas are our biggest revenue drivers.
+Please provide the top 3 pizzas by revenue generated.
+*/
+
+Analyst Task: Calculate revenue per pizza (price * quantity) and rank top 3.
+
+
+-- QUERY
+SELECT *FROM orders;
+SELECT *FROM order_details;
+SELECT *FROM pizzas;  
+SELECT *FROM pizza_types;
+
+SELECT pt.name , SUM(p.price * od.quantity) AS total_revenue
+FROM pizza_types AS pt
+INNER JOIN pizzas AS p
+ON pt.pizza_type_id = p.pizza_type_id
+INNER JOIN order_details AS od
+ON od.pizza_id = p.pizza_id
+GROUP BY pt.name
+ORDER BY total_revenue DESC 
+LIMIT 3;
+
+
+WITH pizza_revenue AS(
+SELECT pt.name , SUM(p.price * od.quantity) ,
+       RANK()OVER(ORDER BY(SUM(p.price * od.quantity)) DESC) AS top_3_pizza_rev
+FROM pizza_types AS pt
+INNER JOIN pizzas AS p
+ON pt.pizza_type_id = p.pizza_type_id
+INNER JOIN order_details AS od
+ON p.pizza_id = od.pizza_id
+GROUP BY pt.name
+)
+
+SELECT *FROM pizza_revenue
+WHERE top_3_pizza_rev <= 3;
+)
+
+
+11. Revenue Contribution Per Pizza
+Stakeholders (CFO):
+
+/* "For our revenue mix analysis , I need to know what percentage of 
+Total revenue each pizza contributes,
+This will show which items carry the business."
+*/
+
+Analyst Task : Divide revenue of each pizza by total revenue , express in %.
+
+-- QUERY
+SELECT *FROM orders;
+SELECT *FROM order_details;
+SELECT *FROM pizzas;  
+SELECT *FROM pizza_types;
+
+
+WITH
+	TOTAL_REVENUE AS (
+		SELECT
+			SUM(OD.QUANTITY * P.PRICE) AS TOTAL_REVENUE
+		FROM
+			ORDER_DETAILS AS OD
+			INNER JOIN PIZZAS AS P ON OD.PIZZA_ID = P.PIZZA_ID
+	)
+SELECT
+	PT.NAME,
+	CONCAT(
+		ROUND(
+			SUM(OD.QUANTITY * P.PRICE) * 100 / (
+				SELECT
+					*
+				FROM
+					TOTAL_REVENUE
+			),
+			2
+		),
+		'%'
+	) AS PIZZA_PER_REVENUE
+FROM
+	PIZZA_TYPES AS PT
+	INNER JOIN PIZZAS AS P ON PT.PIZZA_TYPE_ID = P.PIZZA_TYPE_ID
+	INNER JOIN ORDER_DETAILS AS OD ON P.PIZZA_ID = OD.PIZZA_ID
+GROUP BY
+	PT.NAME
+ORDER BY
+	PIZZA_PER_REVENUE DESC;
+
+
+WITH total_revenue AS (
+    SELECT SUM(od.quantity * p.price) AS total_rev
+    FROM order_details od
+    JOIN pizzas p ON od.pizza_id = p.pizza_id
+)
+
+SELECT 
+    pt.name AS pizza_name,
+    ROUND(SUM(od.quantity * p.price) * 100.0 / tr.total_rev, 2) AS revenue_percentage
+FROM 
+    pizza_types pt
+JOIN 
+    pizzas p ON pt.pizza_type_id = p.pizza_type_id
+JOIN 
+    order_details od ON p.pizza_id = od.pizza_id
+CROSS JOIN total_revenue tr
+GROUP BY 
+    pt.name, tr.total_rev
+ORDER BY 
+    revenue_percentage DESC;
+
+	
+12 . Cumulative Revenue Over Time --(Important QUERY)
+
+Stakeholders (Board of Directors):
+/*
+We want to see how our cumulative revenue has grown month by month
+Since Launch . Can you prepare a cumulative revenue trend line?"
+
+*/
+  
+Analyst Task: Aggregate revenue by date/month and calculate running total.
+
+--QUERY
+
+SELECT order_date,
+	   daily_revenue,
+	   SUM(daily_revenue)OVER(ORDER BY order_date) AS cumulative_revenue
+FROM (
+SELECT
+o.order_date , SUM(od.quantity * p.price) AS daily_revenue
+FROM
+orders AS o
+JOIN order_details AS od
+ON o.order_id = od.order_id
+JOIN pizzas AS p 
+ON od.pizza_id = p.pizza_id
+GROUP BY 
+o.order_date
+) AS t;
+
+
+13. Top 3 Pizzas by Category(Revenue -Based)
+
+Stakeholder (Product Head):
+/*
+"Within each pizza category, which 3 pizzas bring the most revenue ?
+This will help us decide which pizzas to promote or expand."
+*/
+
+Analyst Task: Partition by category, calculate revenue per pizza, rank top 3.
+
+--QUERY
+SELECT *FROM orders;
+SELECT *FROM order_details;
+SELECT *FROM pizzas;  
+SELECT *FROM pizza_types;
+
+WITH pizza_revenue AS(
+SELECT pt.name,
+	   pt.category,
+	   SUM(od.quantity * p.price) AS total_revenue,
+	   RANK()OVER(PARTITION BY pt.category ORDER BY(SUM(od.quantity * p.price))DESC) AS top_pizzas_rev
+FROM pizza_types AS pt
+INNER JOIN pizzas AS p
+ON pt.pizza_type_id = p.pizza_type_id
+INNER JOIN order_details AS od
+ON od.pizza_id = p.pizza_id
+GROUP BY pt.name , pt.category
+)
+SELECT *FROM pizza_revenue
+WHERE top_pizzas_rev <=3;
+
+14.TOP 10 Customers by Spending
+
+Stakeholder (Customer Retention Manager):
+
+/*
+"Who are our top 10 customers based on total spend?
+We want to reward them with loyalty offers."
+*/
+
+--QUERY
+SELECT *FROM orders;
+SELECT *FROM order_details;
+SELECT *FROM pizzas;  
+SELECT *FROM pizza_types;
+SELECT *FROM customers;
+
+SELECT 
+	c.custid,
+	CONCAT(c.first_name ,' ', c.last_name) AS name,
+	SUM(od.quantity * p.price) AS total_revenue
+FROM
+	customers AS c
+INNER JOIN
+	orders AS o
+ON c.custid = o.custid
+INNER JOIN
+	order_details AS od
+ON o.order_id = od.order_id
+INNER JOIN
+	pizzas AS p
+ON od.pizza_id = p.pizza_id
+GROUP BY c.custid , name
+ORDER BY total_revenue DESC
+LIMIT 10;
+	
+
+15. Orders by Weekday
+
+Stakeholder (Marketing Team):
+/*
+"Which days of the week are busiest for orders?
+Do customers order more on weekends?"
+*/
+
+SELECT *FROM orders;
+SELECT *FROM order_details;
+SELECT *FROM pizzas;  
+SELECT *FROM pizza_types;
+SELECT *FROM customers;
+
+SELECT
+	CASE
+	WHEN EXTRACT(ISODOW FROM o.order_date) IN(6,7)
+	THEN 'weekends'
+	ELSE 'weekdays'
+	END AS week,
+COUNT(DISTINCT od.order_id)AS total_order
+FROM orders AS o
+INNER JOIN order_details AS od
+ON o.order_id = od.order_id
+GROUP BY week
+ORDER BY total_order DESC;
+
+
+SELECT  
+    CASE 
+        WHEN EXTRACT(ISODOW FROM o.order_date) IN (6,7) 
+            THEN 'Weekend'
+        ELSE 'Weekday'
+    END AS day_type,
+    
+    COUNT(DISTINCT o.order_id) AS total_orders
+FROM 
+    orders o
+JOIN 
+    order_details od 
+    ON o.order_id = od.order_id
+GROUP BY 
+    day_type
+ORDER BY 
+    total_orders DESC;
+
+
+SELECT TO_CHAR(order_date , 'DAY') AS weekday,
+	   COUNT(DISTINCT o.order_id) AS total_orders
+FROM orders AS o
+INNER JOIN order_details AS od
+ON o.order_id = od.order_id
+GROUP BY weekday
+ORDER BY total_orders DESC;
+
+16. Average Order size
+
+Stakeholder (Supply Chain Manager):
+
+/*
+"What's the average number of Pizzas per order?
+This helps us in planning inventory and staffing."
+*/
+
+--QUERY
+SELECT *FROM customers;
+SELECT *FROM order_details;
+SELECT *FROM orders;
+SELECT *FROM pizza_types;
+SELECT *FROM pizzas;
+
+SELECT ROUND(AVG(total_orders),0) AS avg_orders FROM(
+SELECT o.order_id , SUM(od.quantity) AS total_orders
+FROM 
+orders AS o
+INNER JOIN order_details AS od
+ON o.order_id = od.order_id
+GROUP BY o.order_id
+)AS t;
+
+
+17. Seasonal Trends
+
+Stakeholders (Operations Manager):
+
+/*
+"Do we see peak sales in certain months or holidays?
+This will help us manage seasonal demand"
+*/
+
+SELECT EXTRACT(MONTH FROM order_date) AS month,
+	   COUNT(*) AS total_orders
+FROM orders
+GROUP BY month
+ORDER BY total_orders DESC;
+
+18. Revenue by Pizza Size
+Stakeholder (Finance Head):
+
+/*
+"What is the revenue contribution of each pizza size 
+(S , M , L , XL , XXL)"
+*/
+
+SELECT  p.size , SUM(od.quantity * p.price) AS total_revenue
+FROM pizzas AS p
+INNER JOIN  order_details AS od
+ON p.pizza_id = od.pizza_id
+GROUP BY p.size
+ORDER BY total_revenue DESC;
+
+19. Customer Segmentation
+
+Stakeholder (Customer Insights Team):
+/*
+"Do our high-value customers prefer premium pizzas or regular 
+pizzas? We want to personalize marketing."
+*/
+
+WITH cust_spend AS (
+SELECT c.custid , 
+  	   SUM(od.quantity * p.price) AS total_spent
+FROM customers AS c
+INNER JOIN orders AS o
+ON c.custid = o.custid
+INNER JOIN  order_details AS od
+ON od.order_id = o.order_id
+INNER JOIN pizzas AS p
+ON od.pizza_id = p.pizza_id
+GROUP BY c.custid
+)
+SELECT 
+CASE 
+WHEN total_spent >84000 THEN 'High value' ELSE 'Regular' END AS segment,
+COUNT(*) AS customer_count
+FROM cust_spend
+GROUP BY segment;
+
+
+SELECT
+    c.custid,
+    TO_CHAR(o.order_date, 'YYYY-MM') AS year_month,
+    SUM(od.quantity * p.price) AS monthly_spent
+FROM customers c
+JOIN orders o 
+    ON c.custid = o.custid
+JOIN order_details od
+    ON o.order_id = od.order_id
+JOIN pizzas p 
+    ON od.pizza_id = p.pizza_id
+GROUP BY 
+    c.custid,
+    TO_CHAR(o.order_date, 'YYYY-MM')
+ORDER BY 
+    c.custid,
+    year_month;
+
+20. Repeat Customer Rate
+Stakeholder (CRM Head - Customer Relationship Manager):
+
+/*
+"We want to measure customer loyalty . Can you calculate the percentage
+of repeat customers (customers who placed more than one order)
+Versus one-time buyers? This will help us design retention campaigns."
+*/
+
+Analyst Task:
+  From the orders table, count DISTINCT customers.
+  Count how many customers have more than one order.
+  Calculate repeat rate = (repeat customers / total customers) * 100.
+
+
+WITH cust_orders AS(
+	SELECT custid , COUNT(DISTINCT order_id) AS order_count
+	FROM orders
+	GROUP BY custid
+)
+SELECT ROUND(100.0 * SUM(CASE WHEN order_count > 1 THEN 1 ELSE 0 END) / COUNT(*) , 2) AS repeat_rate
+FROM cust_orders;
+
+
+----------END----------
